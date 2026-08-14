@@ -42,6 +42,19 @@ Este é o serviço de autenticação do projeto ToggleMaster. Ele é responsáve
     ```
     O servidor estará rodando em `http://localhost:8001`.
 
+## ✅ Qualidade e testes
+
+```bash
+gofmt -w .
+go vet ./...
+go test -race -cover ./...
+go build -o bin/auth-service .
+docker build -t togglemaster-auth-service .
+```
+
+O workflow `.github/workflows/ci.yml` executa formatação, análise estática, testes
+unitários e build do binário antes de validar a imagem Docker.
+
 ## 🧪 Testando os Endpoints
 
 Você pode usar `curl` ou Postman.

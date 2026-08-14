@@ -4,12 +4,13 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 )
 
 // generateAPIKey cria uma string aleatória segura de 32 bytes
 func generateAPIKey() (string, error) {
 	bytes := make([]byte, 32) // 32 bytes = 256 bits de entropia
-	if _, err := rand.Read(bytes); err != nil {
+	if _, err := io.ReadFull(rand.Reader, bytes); err != nil {
 		return "", err
 	}
 	// Prefixo para facilitar a identificação da chave
