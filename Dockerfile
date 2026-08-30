@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Build stage: keeps the Go toolchain out of the final image.
-FROM golang:1.21-alpine AS builder
+FROM golang:1.25.13-alpine3.23 AS builder
 
 WORKDIR /src
 
@@ -15,7 +15,7 @@ RUN go mod tidy \
 
 # Runtime stage: small image with only certificates, wget for healthchecks,
 # a non-root user, and the compiled binary.
-FROM alpine:3.20
+FROM alpine:3.23
 
 RUN apk add --no-cache ca-certificates wget \
     && addgroup -S app \
