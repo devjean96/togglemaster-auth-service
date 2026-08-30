@@ -4,7 +4,7 @@ Este é o serviço de autenticação do projeto ToggleMaster. Ele é responsáve
 
 ## 📦 Pré-requisitos (Local)
 
-* [Go](https://go.dev/doc/install) (versão 1.21 ou superior)
+* [Go](https://go.dev/doc/install) (versão 1.25.13 ou superior)
 * [PostgreSQL](https://www.postgresql.org/download/) (rodando localmente ou em um contêiner Docker)
 
 ## 🚀 Rodando Localmente
@@ -52,8 +52,31 @@ go build -o bin/auth-service .
 docker build -t togglemaster-auth-service .
 ```
 
-O workflow `.github/workflows/ci.yml` executa formatação, análise estática, testes
-unitários e build do binário antes de validar a imagem Docker.
+O workflow `.github/workflows/ci.yml` atende ao fluxo DevSecOps da Fase 3:
+
+1. build e testes unitários com detector de corrida;
+2. `gofmt` e `golangci-lint`;
+3. SAST com `gosec` e SCA com Trivy;
+4. build e scan da imagem Docker, bloqueando vulnerabilidades críticas;
+5. em push na `main`, login e push para o ECR com tag imutável `sha-<commit>`;
+6. atualização automática do overlay de homologação no repositório GitOps.
+
+O workflow não cria repositórios via AWS CLI. O ECR
+`togglemaster-homolog/auth-service` deve existir previamente e é gerenciado pelo
+Terraform no repositório `togglemaster-infrastructure`.
+
+### Configuração do GitHub Actions
+
+Cadastre os seguintes secrets no repositório:
+
+- `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` e `AWS_SESSION_TOKEN`: credenciais
+  temporárias do AWS Academy;
+- `GITOPS_TOKEN`: token com permissão de escrita em
+  `devjean96/togglemaster-gitops`.
+
+Credenciais do AWS Academy expiram e devem ser atualizadas antes da execução. Em
+conta pessoal, prefira trocar as credenciais estáticas por OIDC com uma role de
+escopo mínimo. Pull Requests não recebem credenciais AWS e nunca publicam imagens.
 
 ## 🧪 Testando os Endpoints
 
