@@ -1,24 +1,53 @@
 package main
 
 import (
+	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // App struct (para injeção de dependência)
 type App struct {
 	DB        *sql.DB
 	MasterKey string
+	Metrics   *AppMetrics
 }
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	// Carrega o .env para desenvolvimento local. Em produção, isso não fará nada.
 	_ = godotenv.Load()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	shutdownTelemetry, err := setupTelemetry(ctx)
+	if err != nil {
+		return fmt.Errorf("inicializar OpenTelemetry: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(shutdownCtx); err != nil {
+			log.Printf("Erro ao encerrar OpenTelemetry: %v", err)
+		}
+	}()
 
 	// --- Configuração ---
 	port := os.Getenv("PORT")
@@ -28,18 +57,18 @@ func main() {
 
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
-		log.Fatal("DATABASE_URL deve ser definida")
+		return errors.New("DATABASE_URL deve ser definida")
 	}
 
 	masterKey := os.Getenv("MASTER_KEY")
 	if masterKey == "" {
-		log.Fatal("MASTER_KEY deve ser definida")
+		return errors.New("MASTER_KEY deve ser definida")
 	}
 
 	// --- Conexão com o Banco ---
-	db, err := connectDB(databaseURL)
+	db, err := connectDB(ctx, databaseURL)
 	if err != nil {
-		log.Fatalf("Não foi possível conectar ao banco de dados: %v", err)
+		return fmt.Errorf("não foi possível conectar ao banco de dados: %w", err)
 	}
 	defer func() {
 		if err := db.Close(); err != nil {
@@ -50,6 +79,7 @@ func main() {
 	app := &App{
 		DB:        db,
 		MasterKey: masterKey,
+		Metrics:   newAppMetrics(),
 	}
 
 	// --- Rotas da API ---
@@ -57,26 +87,50 @@ func main() {
 	mux.HandleFunc("/health", app.healthHandler)
 
 	// Endpoint público para validar uma chave
-	mux.HandleFunc("/validate", app.validateKeyHandler)
+	mux.Handle("/validate", otelhttp.NewHandler(http.HandlerFunc(app.validateKeyHandler), "GET /validate"))
 
 	// Endpoints de "admin" para criar/gerenciar chaves
 	// Eles são protegidos pelo middleware de autenticação
-	mux.Handle("/admin/keys", app.masterKeyAuthMiddleware(http.HandlerFunc(app.createKeyHandler)))
+	mux.Handle("/admin/keys", otelhttp.NewHandler(
+		app.masterKeyAuthMiddleware(http.HandlerFunc(app.createKeyHandler)),
+		"POST /admin/keys",
+	))
 
 	log.Printf("Serviço de Autenticação (Go) rodando na porta %s", port)
-	if err := http.ListenAndServe(":"+port, mux); err != nil {
-		log.Fatal(err)
+	server := &http.Server{
+		Addr:              ":" + port,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
 	}
+	serverErrors := make(chan error, 1)
+	go func() {
+		serverErrors <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serverErrors:
+		if !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("servidor HTTP: %w", err)
+		}
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("encerrar servidor HTTP: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // connectDB inicializa e testa a conexão com o PostgreSQL
-func connectDB(databaseURL string) (*sql.DB, error) {
+func connectDB(ctx context.Context, databaseURL string) (*sql.DB, error) {
 	db, err := sql.Open("pgx", databaseURL)
 	if err != nil {
 		return nil, err
 	}
 
-	if err = db.Ping(); err != nil {
+	if err = db.PingContext(ctx); err != nil {
 		return nil, err
 	}
 

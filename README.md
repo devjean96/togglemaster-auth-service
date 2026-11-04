@@ -126,3 +126,15 @@ curl http://localhost:8001/validate \
 
 Saída esperada: `Chave de API inválida ou inativa`
 
+## OpenTelemetry e New Relic APM
+
+O serviço exporta traces e métricas por OTLP/HTTP para o Collector configurado
+em `OTEL_EXPORTER_OTLP_ENDPOINT`. Requisições HTTP, validações e operações
+PostgreSQL participam do mesmo trace. Headers de autorização, API keys, hashes e
+credenciais não são adicionados à telemetria.
+
+No EKS, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`, protocolo, sampling e
+exportadores são fornecidos pelo ConfigMap/Deployment GitOps. Para execução
+local, aponte o endpoint para um Collector acessível e mantenha
+`OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`.
+

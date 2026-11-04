@@ -1,11 +1,20 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
+
+var authTracer = otel.Tracer("togglemaster/auth-service")
 
 // Estrutura para o corpo da requisição de criação de chave
 type CreateKeyRequest struct {
@@ -29,11 +38,16 @@ func (a *App) healthHandler(w http.ResponseWriter, r *http.Request) {
 
 // validateKeyHandler verifica se uma chave de API (enviada via Header) é válida
 func (a *App) validateKeyHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := authTracer.Start(r.Context(), "auth.validate_api_key")
+	defer span.End()
+
 	// Extrai a chave do header "Authorization: Bearer <key>"
 	authHeader := r.Header.Get("Authorization")
 	keyString := strings.TrimPrefix(authHeader, "Bearer ")
 
 	if keyString == "" {
+		span.SetAttributes(attribute.String("auth.result", "missing_credentials"))
+		a.recordValidation(ctx, false)
 		http.Error(w, "Authorization header não encontrado", http.StatusUnauthorized)
 		return
 	}
@@ -43,15 +57,37 @@ func (a *App) validateKeyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Verifica se o hash existe no banco de dados
 	var id int
-	err := a.DB.QueryRow("SELECT id FROM api_keys WHERE key_hash = $1 AND is_active = true", keyHash).Scan(&id)
+	dbCtx, dbSpan := authTracer.Start(
+		ctx,
+		"postgresql.validate_api_key",
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			attribute.String("db.system.name", "postgresql"),
+			attribute.String("db.operation.name", "SELECT"),
+		),
+	)
+	err := a.DB.QueryRowContext(dbCtx, "SELECT id FROM api_keys WHERE key_hash = $1 AND is_active = true", keyHash).Scan(&id)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		dbSpan.RecordError(err)
+		dbSpan.SetStatus(codes.Error, "database query failed")
+	}
+	dbSpan.End()
 	if err != nil {
-		// Se não encontrar (sql.ErrNoRows), ou qualquer outro erro, a chave é inválida
-		log.Printf("Falha na validação da chave (hash: %s...): %v", keyHash[:6], err)
+		span.SetAttributes(attribute.String("auth.result", "invalid"))
+		a.recordValidation(ctx, false)
+		if !errors.Is(err, sql.ErrNoRows) {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "database query failed")
+			a.recordDatabaseError(ctx, "validate")
+			log.Printf("Falha ao consultar chave no banco: %v", err)
+		}
 		http.Error(w, "Chave de API inválida ou inativa", http.StatusUnauthorized)
 		return
 	}
 
 	// Chave válida
+	span.SetAttributes(attribute.String("auth.result", "valid"))
+	a.recordValidation(ctx, true)
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(map[string]string{"message": "Chave válida"}); err != nil {
 		log.Printf("Erro ao serializar resposta de validacao: %v", err)
@@ -60,6 +96,9 @@ func (a *App) validateKeyHandler(w http.ResponseWriter, r *http.Request) {
 
 // createKeyHandler cria uma nova chave de API
 func (a *App) createKeyHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := authTracer.Start(r.Context(), "auth.create_api_key")
+	defer span.End()
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Método não permitido", http.StatusMethodNotAllowed)
 		return
@@ -79,6 +118,8 @@ func (a *App) createKeyHandler(w http.ResponseWriter, r *http.Request) {
 	// Gera uma nova chave e seu hash
 	newKey, err := generateAPIKey()
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "key generation failed")
 		http.Error(w, "Erro ao gerar a chave", http.StatusInternalServerError)
 		return
 	}
@@ -86,18 +127,37 @@ func (a *App) createKeyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Salva o hash no banco de dados
 	var newID int
-	err = a.DB.QueryRow(
+	dbCtx, dbSpan := authTracer.Start(
+		ctx,
+		"postgresql.create_api_key",
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			attribute.String("db.system.name", "postgresql"),
+			attribute.String("db.operation.name", "INSERT"),
+		),
+	)
+	err = a.DB.QueryRowContext(dbCtx,
 		"INSERT INTO api_keys (name, key_hash) VALUES ($1, $2) RETURNING id",
 		req.Name, newKeyHash,
 	).Scan(&newID)
+	if err != nil {
+		dbSpan.RecordError(err)
+		dbSpan.SetStatus(codes.Error, "database insert failed")
+	}
+	dbSpan.End()
 
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "database insert failed")
+		a.recordDatabaseError(ctx, "create")
 		log.Printf("Erro ao salvar a chave no banco: %v", err)
 		http.Error(w, "Erro ao salvar a chave", http.StatusInternalServerError)
 		return
 	}
 
 	log.Printf("Nova chave criada com sucesso (ID: %d, Name: %s)", newID, req.Name)
+	span.SetAttributes(attribute.String("auth.result", "created"))
+	a.recordKeyCreated(ctx)
 	w.WriteHeader(http.StatusCreated)
 	if err := json.NewEncoder(w).Encode(CreateKeyResponse{
 		Name:    req.Name,
