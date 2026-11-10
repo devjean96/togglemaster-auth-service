@@ -8,10 +8,23 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
+
+func TestTelemetryResourceMergesWithoutSchemaConflict(t *testing.T) {
+	res, err := telemetryResource("auth-service")
+	if err != nil {
+		t.Fatalf("merge telemetry resource: %v", err)
+	}
+
+	value, ok := res.Set().Value(attribute.Key("service.name"))
+	if !ok || value.AsString() != "auth-service" {
+		t.Fatalf("unexpected service.name: %q", value.AsString())
+	}
+}
 
 func TestHTTPInstrumentationContinuesIncomingTraceWithoutCredentials(t *testing.T) {
 	previousProvider := otel.GetTracerProvider()
