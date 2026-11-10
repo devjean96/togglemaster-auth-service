@@ -138,3 +138,4 @@ exportadores são fornecidos pelo ConfigMap/Deployment GitOps. Para execução
 local, aponte o endpoint para um Collector acessível e mantenha
 `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`.
 
+
