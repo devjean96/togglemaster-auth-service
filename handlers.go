@@ -76,10 +76,14 @@ func (a *App) validateKeyHandler(w http.ResponseWriter, r *http.Request) {
 		span.SetAttributes(attribute.String("auth.result", "invalid"))
 		a.recordValidation(ctx, false)
 		if !errors.Is(err, sql.ErrNoRows) {
+			// Falha de infraestrutura nao e "chave invalida": responder 401
+			// escondia a indisponibilidade do banco (falha silenciosa).
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "database query failed")
 			a.recordDatabaseError(ctx, "validate")
-			log.Printf("Falha ao consultar chave no banco: %v", err)
+			log.Printf("ERROR falha ao consultar chave no banco: %v", err)
+			http.Error(w, "Servico de autenticacao indisponivel", http.StatusServiceUnavailable)
+			return
 		}
 		http.Error(w, "Chave de API inválida ou inativa", http.StatusUnauthorized)
 		return

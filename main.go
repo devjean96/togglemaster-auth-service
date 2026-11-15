@@ -22,6 +22,7 @@ type App struct {
 	DB        *sql.DB
 	MasterKey string
 	Metrics   *AppMetrics
+	Faults    FaultInjector
 }
 
 func main() {
@@ -86,8 +87,19 @@ func run() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", app.healthHandler)
 
-	// Endpoint público para validar uma chave
-	mux.Handle("/validate", otelhttp.NewHandler(http.HandlerFunc(app.validateKeyHandler), "GET /validate"))
+	// Endpoint público para validar uma chave.
+	// faultInjectionMiddleware permite simular a falha da Fase 4 (Tech Challenge).
+	mux.Handle("/validate", otelhttp.NewHandler(
+		app.faultInjectionMiddleware(http.HandlerFunc(app.validateKeyHandler)),
+		"GET /validate",
+	))
+
+	// Liga/desliga a falha simulada. Protegido pela MASTER_KEY e desligado
+	// por padrao; o estado vive so na memoria do pod, entao um restart cura.
+	mux.Handle("/admin/chaos", otelhttp.NewHandler(
+		app.masterKeyAuthMiddleware(http.HandlerFunc(app.chaosHandler)),
+		"/admin/chaos",
+	))
 
 	// Endpoints de "admin" para criar/gerenciar chaves
 	// Eles são protegidos pelo middleware de autenticação
