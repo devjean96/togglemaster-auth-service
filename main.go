@@ -66,6 +66,11 @@ func run() error {
 		return errors.New("MASTER_KEY deve ser definida")
 	}
 
+	evaluationServiceAPIKey := os.Getenv("EVALUATION_SERVICE_API_KEY")
+	if evaluationServiceAPIKey == "" {
+		return errors.New("EVALUATION_SERVICE_API_KEY deve ser definida")
+	}
+
 	// --- Conexão com o Banco ---
 	db, err := connectDB(ctx, databaseURL)
 	if err != nil {
@@ -76,6 +81,10 @@ func run() error {
 			log.Printf("Erro ao fechar conexao com o banco: %v", err)
 		}
 	}()
+
+	if err := bootstrapEvaluationServiceAPIKey(ctx, db, evaluationServiceAPIKey); err != nil {
+		return fmt.Errorf("cadastrar chave interna do evaluation-service: %w", err)
+	}
 
 	app := &App{
 		DB:        db,

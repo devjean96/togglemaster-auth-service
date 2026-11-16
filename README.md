@@ -29,6 +29,9 @@ Este é o serviço de autenticação do projeto ToggleMaster. Ele é responsáve
     
     # Chave mestra para criar novas chaves de API
     MASTER_KEY="admin-secreto-123"
+
+    # Chave compartilhada com o evaluation-service; e cadastrada automaticamente
+    EVALUATION_SERVICE_API_KEY="tm_key_evaluation-local"
     ```
 
 4.  **Instale as Dependências:**
@@ -137,5 +140,10 @@ No EKS, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`, protocolo, sampling e
 exportadores são fornecidos pelo ConfigMap/Deployment GitOps. Para execução
 local, aponte o endpoint para um Collector acessível e mantenha
 `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`.
+
+Na inicialização, o serviço cadastra de forma idempotente a chave recebida em
+`EVALUATION_SERVICE_API_KEY`. Somente o hash SHA-256 é armazenado em `api_keys`;
+quando o Secret é rotacionado e o Pod reiniciado, o cadastro anterior é
+desativado.
 
 
